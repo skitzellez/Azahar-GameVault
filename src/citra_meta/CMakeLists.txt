@@ -73,6 +73,10 @@ endif()
 
 target_link_libraries(citra_meta PRIVATE citra_cli citra_common fmt)
 
+if (ENABLE_SDL2_FRONTEND)
+    target_link_libraries(citra_meta PRIVATE citra_sdl SDL2::SDL2)
+endif()
+
 if (ENABLE_QT)
     target_link_libraries(citra_meta PRIVATE citra_qt)
 endif()
@@ -106,4 +110,10 @@ endif()
 
 if(UNIX AND NOT APPLE)
     install(TARGETS citra_meta RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}/bin")
+endif()
+
+# Game Vault (Xbox): DLLs an Xbox app may lack, only loaded when used (ole32: the AppData lookup, never on Xbox)
+if (MSVC AND ENABLE_SDL2_FRONTEND)
+    target_link_libraries(citra_meta PRIVATE delayimp)
+    target_link_options(citra_meta PRIVATE "/DELAYLOAD:avrt.dll" "/DELAYLOAD:winmm.dll" "/DELAYLOAD:ole32.dll")
 endif()

@@ -19,6 +19,14 @@
 #include "input_common/touch_from_button.h"
 #include "input_common/udp/udp.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <appmodel.h>
+#endif
+
 namespace InputCommon {
 
 #ifdef ENABLE_GCADAPTER
@@ -48,8 +56,19 @@ void Init() {
     Input::RegisterFactory<Input::TouchDevice>("touch_from_button",
                                                std::make_shared<TouchFromButtonFactory>());
 
-    sdl = SDL::Init();
+    if (!getenv("GV_NOPAD")) {
+        sdl = SDL::Init();
+    }
 
+#ifdef _WIN32
+    // Game Vault (Xbox): no motion-controls network service (a network thread nothing uses there)
+    {
+        UINT32 len = 0;
+        if (GetCurrentPackageFullName(&len, nullptr) == ERROR_INSUFFICIENT_BUFFER) {
+            return;
+        }
+    }
+#endif
     udp = CemuhookUDP::Init();
 }
 

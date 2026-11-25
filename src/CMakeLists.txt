@@ -208,7 +208,11 @@ if (ENABLE_QT)
     add_subdirectory(citra_qt)
 endif()
 
-if (ENABLE_QT) # Or any other hypothetical future frontends
+if (ENABLE_SDL2_FRONTEND)
+    add_subdirectory(citra_sdl)
+endif()
+
+if (ENABLE_QT OR ENABLE_SDL2_FRONTEND)
     add_subdirectory(citra_cli)
     add_subdirectory(citra_meta)
 endif()

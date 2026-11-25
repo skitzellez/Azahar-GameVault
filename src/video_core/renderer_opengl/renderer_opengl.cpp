@@ -2,6 +2,7 @@
 // Licensed under GPLv3 or any later version
 // Refer to the LICENSE.txt file included.
 
+#include <cstdio>
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
@@ -22,6 +23,7 @@
 #include "video_core/host_shaders/opengl_present_vert.h"
 
 namespace OpenGL {
+extern void (*g_gv_log)(const char*); // Game Vault (Xbox), defined below
 
 MICROPROFILE_DEFINE(OpenGL_RenderFrame, "OpenGL", "Render Frame", MP_RGB(128, 128, 64));
 MICROPROFILE_DEFINE(OpenGL_WaitPresent, "OpenGL", "Wait For Present", MP_RGB(128, 128, 128));
@@ -265,6 +267,21 @@ void RendererOpenGL::RenderToMailbox(const Layout::FramebufferLayout& layout,
         state.draw.draw_framebuffer = frame->render.handle;
         state.Apply();
         DrawScreens(layout, flipped);
+        {
+            // Game Vault (Xbox): the frame's colour right after the game drew it (this, the game's context)
+            static int gv_drawn = 0;
+            if (g_gv_log && (++gv_drawn == 120 || gv_drawn == 600)) {
+                unsigned char top[4] = {}, bottom[4] = {};
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, frame->render.handle);
+                glReadPixels(frame->width / 2, frame->height * 3 / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, top);
+                glReadPixels(frame->width / 2, frame->height / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, bottom);
+                char line[200];
+                std::snprintf(line, sizeof(line), "drawn %d (game context): top %u,%u,%u bottom %u,%u,%u, GL error %u",
+                              gv_drawn, top[0], top[1], top[2], bottom[0], bottom[1], bottom[2], glGetError());
+                g_gv_log(line);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, state.draw.read_framebuffer);
+            }
+        }
         // Create a fence for the frontend to wait on and swap this frame to OffTex
         frame->render_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
@@ -745,6 +762,12 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
 }
 
 void RendererOpenGL::ApplySecondLayerOpacity(float opacity) {
+    // Game Vault (Xbox): a fully opaque second screen is drawn without constant-alpha blending, which Mesa on
+    // D3D12 there does not do (the 3DS bottom screen came out black). Same picture at opacity 1.
+    if (opacity >= 1.0f) {
+        ResetSecondLayerOpacity();
+        return;
+    }
     state.blend.src_rgb_func = GL_CONSTANT_ALPHA;
     state.blend.src_a_func = GL_CONSTANT_ALPHA;
     state.blend.dst_a_func = GL_ONE_MINUS_CONSTANT_ALPHA;
@@ -882,6 +905,11 @@ void RendererOpenGL::DrawBottomScreen(const Layout::FramebufferLayout& layout,
     }
 }
 
+// Game Vault (Xbox): set when TryPresent drew a frame, so the Xbox app swaps only then
+bool g_gv_frame_presented = false;
+// Game Vault (Xbox): a log line callback set by the Xbox frontend
+void (*g_gv_log)(const char*) = nullptr;
+
 void RendererOpenGL::TryPresent(int timeout_ms, bool is_secondary) {
     const auto& window = is_secondary ? *secondary_window : render_window;
     const auto& layout = window.GetFramebufferLayout();
@@ -921,6 +949,21 @@ void RendererOpenGL::TryPresent(int timeout_ms, bool is_secondary) {
     glFlush();
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    g_gv_frame_presented = true;
+    static int gv_count = 0;
+    if (g_gv_log && (++gv_count == 120 || gv_count == 600 || gv_count == 1800)) {
+        // Game Vault (Xbox): what colour the game frame has (top screen middle, bottom screen middle)
+        unsigned char top[4] = {}, bottom[4] = {};
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, frame->present.handle);
+        glReadPixels(frame->width / 2, frame->height * 3 / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, top);
+        glReadPixels(frame->width / 2, frame->height / 4, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, bottom);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        char line[200];
+        std::snprintf(line, sizeof(line), "frame %d: %ux%u, layout %ux%u, top %u,%u,%u bottom %u,%u,%u, GL error %u",
+                      gv_count, frame->width, frame->height, layout.width, layout.height, top[0], top[1],
+                      top[2], bottom[0], bottom[1], bottom[2], glGetError());
+        g_gv_log(line);
+    }
 }
 
 void RendererOpenGL::PrepareVideoDumping() {
