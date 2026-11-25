@@ -95,6 +95,82 @@ extern "C" int citra_uwp_JitMemorySupported(void);
 
 namespace {
 
+/// Game Vault: what the simple pause screen asks the main loop to do.
+enum class GvPauseChoice { None, Resume, QuickSave, QuickLoad, SwapScreens, Layout, Settings,
+                           FullMenu, Quit };
+
+/// Game Vault: a simple pause screen (Start+Select) with big buttons, in place of the desktop
+/// style menu bar. The full menu stays one press away under "All Options".
+GvPauseChoice DrawGvPauseMenu(bool focus_first, bool quick_slot_used) {
+    GvPauseChoice choice = GvPauseChoice::None;
+    const ImGuiIO& io = ImGui::GetIO();
+    const float scale = io.DisplaySize.y / 1080.0f;
+    const float width = 560.0f * scale;
+    const float button_h = 64.0f * scale;
+
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##gv_pause_dim", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(width + 64.0f * scale, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 18.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(32.0f * scale, 28.0f * scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f * scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 12.0f * scale));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.08f, 0.13f, 0.97f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.13f, 0.17f, 0.26f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.16f, 0.42f, 0.85f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.10f, 0.32f, 0.70f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0.55f, 0.78f, 1.0f, 1.0f));
+    ImGui::Begin("##gv_pause", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoMove);
+    ImGui::SetWindowFontScale(1.5f);
+    ImGui::TextUnformatted("Paused");
+    ImGui::SetWindowFontScale(1.25f);
+    ImGui::Separator();
+
+    const ImVec2 size(width, button_h);
+    auto button = [&](const char* label, GvPauseChoice what, bool enabled = true) {
+        ImGui::BeginDisabled(!enabled);
+        if (ImGui::Button(label, size)) {
+            choice = what;
+        }
+        ImGui::EndDisabled();
+    };
+    if (focus_first) {
+        ImGui::SetKeyboardFocusHere();
+    }
+    button("Resume", GvPauseChoice::Resume);
+    if (focus_first) {
+        ImGui::SetItemDefaultFocus();
+    }
+    button("Quick Save", GvPauseChoice::QuickSave);
+    button("Quick Load", GvPauseChoice::QuickLoad, quick_slot_used);
+    button("Swap Screens", GvPauseChoice::SwapScreens);
+    button("Change Screen Layout", GvPauseChoice::Layout);
+    button("Settings", GvPauseChoice::Settings);
+    button("All Options", GvPauseChoice::FullMenu);
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.45f, 0.12f, 0.14f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.18f, 0.20f, 1.0f));
+    button("Quit to Game Vault", GvPauseChoice::Quit);
+    ImGui::PopStyleColor(2);
+
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::TextDisabled("A Select    B Resume");
+    ImGui::End();
+    ImGui::PopStyleColor(5);
+    ImGui::PopStyleVar(4);
+    return choice;
+}
+
 /// Xbox is always full screen and must not receive desktop windowing requests.
 void RequestDesktopFullScreen() try {
     if (SDL_WinRTGetDeviceFamily() != SDL_WINRT_DEVICEFAMILY_DESKTOP) {
@@ -817,6 +893,8 @@ int main(int argc, char** argv) {
     bool auto_muted_in_background = false;
     bool exit_confirmation_pending = false;
     bool in_game_menu_visible = false;
+    // Game Vault: the simple pause screen shows first; "All Options" switches to the full menu.
+    bool gv_full_menu = false;
     bool in_game_menu_popup_open = false;
     int menu_focus_frames = 0;
     UWP::MenuAction menu_return_action = UWP::MenuAction::None;
@@ -1849,14 +1927,58 @@ int main(int argc, char** argv) {
             if (menu_toggle_requested && !preparing_loaded_title) {
                 in_game_menu_visible = !in_game_menu_visible;
                 in_game_menu_popup_open = false;
+                gv_full_menu = false;
                 if (in_game_menu_visible) {
                     refresh_save_state_slots();
-                    main_menu.FocusEmulation();
                 }
                 // Retry item focus across the overlay's first two submitted frames.
                 menu_focus_frames = in_game_menu_visible ? 2 : 0;
             }
-            if (in_game_menu_visible) {
+            if (in_game_menu_visible && !gv_full_menu) {
+                const bool close_requested =
+                    !menu_toggle_requested && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
+                const GvPauseChoice choice =
+                    DrawGvPauseMenu(menu_focus_frames > 0, available_save_state_slots[0]);
+                if (menu_focus_frames > 0) {
+                    --menu_focus_frames;
+                }
+                bool close = close_requested || choice != GvPauseChoice::None;
+                switch (choice) {
+                case GvPauseChoice::QuickSave:
+                    menu_action = UWP::MenuAction::QuickSave;
+                    break;
+                case GvPauseChoice::QuickLoad:
+                    menu_action = UWP::MenuAction::QuickLoad;
+                    break;
+                case GvPauseChoice::SwapScreens:
+                    menu_action = UWP::MenuAction::ScreenLayoutSwapScreens;
+                    break;
+                case GvPauseChoice::Layout:
+                    menu_action = UWP::MenuAction::ScreenLayoutCycle;
+                    break;
+                case GvPauseChoice::Settings:
+                    menu_action = UWP::MenuAction::Configure;
+                    menu_action_from_quick_menu = true;
+                    break;
+                case GvPauseChoice::FullMenu:
+                    gv_full_menu = true;
+                    close = false;
+                    main_menu.FocusEmulation();
+                    menu_focus_frames = 2;
+                    break;
+                case GvPauseChoice::Quit:
+                    LOG_INFO(Frontend, "Game Vault: Quit to Game Vault chosen");
+                    emu_window.RequestQuit();
+                    break;
+                default:
+                    break;
+                }
+                if (close) {
+                    in_game_menu_visible = false;
+                    in_game_menu_popup_open = false;
+                    menu_focus_frames = 0;
+                }
+            } else if (in_game_menu_visible) {
                 menu_context.save_state_slots = available_save_state_slots;
                 if (menu_focus_frames > 0) {
                     main_menu.FocusEmulation();
@@ -2165,11 +2287,10 @@ int main(int argc, char** argv) {
             multiplayer.LeaveRoom();
             break;
         case UWP::MenuAction::Exit:
-            if (title_running && UWP::values.confirm_before_closing.GetValue()) {
-                exit_confirmation_pending = true;
-            } else {
-                emu_window.RequestQuit();
-            }
+            // Game Vault: no confirm box here; it paused the game without showing on the
+            // console, so Exit looked like it did nothing.
+            LOG_INFO(Frontend, "Game Vault: Exit chosen");
+            emu_window.RequestQuit();
             break;
         case UWP::MenuAction::SaveState:
         case UWP::MenuAction::LoadState:
