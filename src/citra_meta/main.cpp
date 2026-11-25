@@ -65,6 +65,8 @@ static int __cdecl GvXboxMain(int, char**) {
     // SDL audio devices hang in an Xbox app; the Xbox controller needs Windows.Gaming.Input (off unless asked)
     SDL_SetHint("SDL_AUDIO_DRIVER", "dummy");
     SDL_SetHint("SDL_JOYSTICK_WGI", "1");
+    // only Windows.Gaming.Input: SDL's XInput fallback re-enters it mid-dispatch (memory corruption at start)
+    SDL_SetHint("SDL_XINPUT_ENABLED", "0");
     SDL_InitSubSystem(SDL_INIT_VIDEO);
     const char* uri = nullptr;
     for (int i = 0; i < 300 && (uri = SDL_GetHint("SDL_WINRT_ACTIVATION_URI")) == nullptr; i++) {
