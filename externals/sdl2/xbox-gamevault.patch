@@ -1,0 +1,43 @@
+diff --git a/src/core/winrt/SDL_winrtapp_direct3d.cpp b/src/core/winrt/SDL_winrtapp_direct3d.cpp
+index 6f1aff6..498cb60 100644
+--- a/src/core/winrt/SDL_winrtapp_direct3d.cpp
++++ b/src/core/winrt/SDL_winrtapp_direct3d.cpp
+@@ -337,6 +337,10 @@ void SDL_WinRTApp::Load(Platform::String ^ entryPoint)
+ {
+ }
+ 
++// Game Vault: the link's launchOnExit (e.g. gamevault:?from=azahar) opens when the app's main returns, so the player
++// lands back in the frontend that started the game
++static Platform::String ^ GV_LaunchOnExit = nullptr;
++
+ void SDL_WinRTApp::Run()
+ {
+     SDL_SetMainReady();
+@@ -362,6 +366,15 @@ void SDL_WinRTApp::Run()
+         }
+         SDL_free(argv);
+     }
++
++    if (GV_LaunchOnExit && !GV_LaunchOnExit->IsEmpty()) {
++        auto uri = ref new Windows::Foundation::Uri(GV_LaunchOnExit);
++        auto launch = Windows::System::Launcher::LaunchUriAsync(uri);
++        launch->Completed = ref new Windows::Foundation::AsyncOperationCompletedHandler<bool>(
++            [](Windows::Foundation::IAsyncOperation<bool> ^, Windows::Foundation::AsyncStatus) {
++                CoreApplication::Exit();
++            });
++    }
+ }
+ 
+ static bool IsSDLWindowEventPending(SDL_WindowEventID windowEventID)
+@@ -630,6 +643,11 @@ void SDL_WinRTApp::OnAppActivated(CoreApplicationView ^ applicationView, IActiva
+             } catch (Platform::Exception ^) {
+                 // A bare azahar: URI is also used to probe protocol availability.
+             }
++            try {
++                GV_LaunchOnExit = protocolArgs->Uri->QueryParsed->GetFirstValueByName(L"launchOnExit");
++            } catch (Platform::Exception ^) {
++                // A bare azahar: URI is also used to probe protocol availability.
++            }
+             if (commandLine && !commandLine->IsEmpty()) {
+                 const wchar_t *path = commandLine->Data();
+                 while (*path != L'\0' && *path != L' ' && *path != L'\t') {
